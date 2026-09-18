@@ -129,6 +129,10 @@ def ping_flood_status(timeout=5):
     return d.get('floods', {})
 
 
+def overview(timeout=6):
+    return _get('/overview', timeout=timeout)
+
+
 # ── proteksi & MAC ─────────────────────────────────────────────────
 def protect(gw):
     return _post('/protect', gw)

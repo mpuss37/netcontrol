@@ -844,6 +844,54 @@ def ping_flood_state():
     return json.dumps({'status': 'success', 'floods': ping_flood_status()})
 
 
+@route('/overview')
+def overview():
+    """Ringkasan status untuk panel dashboard GUI."""
+    response.headers['Content-Type'] = 'application/json'
+    gw = get_default_gw()
+    my = {}
+    try:
+        my = get_my(gw.get('iface', 'wlan0'))
+    except Exception:
+        pass
+    with _victims_lock:
+        n_cut = sum(1 for v in victims if v.get('mode') == 'cut')
+        n_limit = sum(1 for v in victims if v.get('mode') == 'limit')
+        n_victim = len(victims)
+    try:
+        floods = ping_flood_status()
+        n_flood = len(floods)
+    except Exception:
+        floods = {}
+        n_flood = 0
+    try:
+        seen = get_seen_hosts()
+        n_seen = len(seen)
+    except Exception:
+        n_seen = 0
+    # hitung rule DROP aktif di FORWARD (rule cut)
+    try:
+        from utils import _run as _ipt_run
+        rc, out, _ = _ipt_run(['iptables', '-S', 'FORWARD'])
+        n_drop = out.count('-j DROP')
+    except Exception:
+        n_drop = 0
+
+    return json.dumps({
+        'status': 'success',
+        'gw': gw,
+        'my': my,
+        'iface': gw.get('iface', 'wlan0'),
+        'victims': n_victim,
+        'cut': n_cut,
+        'limit': n_limit,
+        'flood': n_flood,
+        'floods': floods,
+        'seen': n_seen,
+        'drop_rules': n_drop,
+    })
+
+
 if __name__ == '__main__':
     logger.info('NetControl server starting ...')
     # mulai sniffer ARP persisten supaya daftar host lengkap

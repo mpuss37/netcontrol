@@ -14,11 +14,11 @@ import os
 import shelve
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTableView, QCheckBox,
     QToolBar, QAction, QLabel, QMessageBox, QHeaderView, QApplication, QStyle,
-    QAbstractItemView,
+    QAbstractItemView, QTabWidget, QPlainTextEdit,
 )
 
 from . import api, theme
@@ -107,9 +107,25 @@ class MainWindow(QMainWindow):
         self.cb_protection.toggled.connect(self._toggle_protection)
         top.addWidget(self.cb_protection)
         top.addStretch(1)
-        self.lbl_info = QLabel('')
-        top.addWidget(self.lbl_info)
         v.addLayout(top)
+
+        # ── panel dashboard status (2 baris, berwarna) ──
+        dash = QVBoxLayout()
+        dash.setContentsMargins(6, 4, 6, 2)
+        dash.setSpacing(2)
+        self.lbl_status = QLabel('Memuat...')
+        self.lbl_status.setTextFormat(Qt.RichText)
+        self.lbl_status.setWordWrap(True)
+        dash.addWidget(self.lbl_status)
+        self.lbl_state = QLabel('')
+        self.lbl_state.setTextFormat(Qt.RichText)
+        self.lbl_state.setWordWrap(True)
+        dash.addWidget(self.lbl_state)
+        v.addLayout(dash)
+
+        # ── tabs: Hosts / Floods ──
+        self.tabs = QTabWidget()
+        v.addWidget(self.tabs, 1)
 
         self.model = HostModel(self)
         self.table = QTableView()
@@ -123,10 +139,22 @@ class MainWindow(QMainWindow):
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeToContents)
         hdr.setStretchLastSection(True)
-        v.addWidget(self.table, 1)
+        self.tabs.addTab(self.table, 'Hosts')
+
+        # tab Floods: daftar host yang sedang di-ping-flood
+        self.flood_text = QPlainTextEdit()
+        self.flood_text.setReadOnly(True)
+        self.tabs.addTab(self.flood_text, 'Floods')
 
         self._build_toolbar()
         self.statusBar().showMessage('Siap')
+
+        # refresh dashboard tiap 2 detik
+        self._dash_timer = QTimer(self)
+        self._dash_timer.setInterval(2000)
+        self._dash_timer.timeout.connect(self._refresh_dashboard)
+        self._dash_timer.start()
+        self._refresh_dashboard()
 
     def _icon(self, sp):
         return QApplication.style().standardIcon(sp)
@@ -486,3 +514,62 @@ class MainWindow(QMainWindow):
             parts.append('{} flooding'.format(n_flood))
         self.statusBar().showMessage(
             'Siap - ' + ', '.join(parts) if parts else 'Siap')
+
+    # ── dashboard status ───────────────────────────────────────────
+    def _refresh_dashboard(self):
+        """Ambil /overview dan tampilkan panel status 2 baris."""
+        try:
+            ov = api.overview()
+        except api.ApiError:
+            self.lbl_status.setText(
+                '<span style="color:#e5484d;font-weight:600">'
+                'Server tidak terhubung</span>')
+            self.lbl_state.setText('')
+            return
+
+        gw = ov.get('gw', {}) or {}
+        my = ov.get('my', {}) or {}
+        iface = ov.get('iface', '?')
+        n_host = self.model.rowCount()
+
+        # baris 1: jaringan
+        self.lbl_status.setText(
+            'Iface: <b>{}</b> &nbsp;|&nbsp; '
+            'Host: <b>{}</b> &nbsp;|&nbsp; '
+            'Seen (ARP): <b>{}</b> &nbsp;|&nbsp; '
+            'GW: <b>{}</b> ({}) &nbsp;|&nbsp; '
+            'This device: <b>{}</b>'.format(
+                iface, n_host,
+                ov.get('seen', 0),
+                gw.get('ip', '?'), gw.get('mac', '?'),
+                my.get('ip', '?')))
+
+        # baris 2: aksi aktif
+        n_cut = ov.get('cut', 0)
+        n_lim = ov.get('limit', 0)
+        n_flood = ov.get('flood', 0)
+        n_drop = ov.get('drop_rules', 0)
+
+        def _num(v, color='#e0a52a'):
+            if v > 0:
+                return '<b style="color:{}">{}</b>'.format(color, v)
+            return '<b style="color:#46c46a">0</b>'
+
+        self.lbl_state.setText(
+            'Cut: {} &nbsp;|&nbsp; '
+            'Limit: {} &nbsp;|&nbsp; '
+            'Flood: {} &nbsp;|&nbsp; '
+            'DROP rules: <b>{}</b> &nbsp;|&nbsp; '
+            'Victims: <b>{}</b>'.format(
+                _num(n_cut, '#e5484d'), _num(n_lim, '#e0a52a'),
+                _num(n_flood, '#e0a52a'), n_drop, ov.get('victims', 0)))
+
+        # isi tab Floods
+        floods = ov.get('floods', {}) or {}
+        lines = []
+        for ip, info in floods.items():
+            lines.append('{}  ({} pps, {} B, {} pkt)'.format(
+                ip, info.get('hz', '?'), info.get('size', '?'),
+                info.get('sent', 0)))
+        self.flood_text.setPlainText(
+            chr(10).join(lines) if lines else 'Tidak ada flood aktif.')

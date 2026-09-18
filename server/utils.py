@@ -4,6 +4,7 @@ import sys
 import subprocess as sp
 import logging
 import time
+import threading
 from scapy.all import *
 import netifaces
 
@@ -1389,3 +1390,100 @@ def ping_flood_status():
 
 def ping_flood_active_ips():
     return list(ping_flood_status().keys())
+
+
+# ---------------------------------------------------------------------
+#  Sniffer ARP persisten — supaya daftar host LENGKAP (seperti NetView)
+# ---------------------------------------------------------------------
+# Sebelumnya NetControl hanya menampilkan snapshot arp_scan_union() saat
+# scan diklik; host yang kebetulan diam tidak terdeteksi. Dengan sniffer
+# yang jalan terus-menerus, semua host yang pernah berkomunikasi lewat
+# ARP akan tercatat. Host yang tidak terlihat > TTL akan dibuang.
+_SEEN_HOSTS = {}          # {ip: {'mac': str, 'last_seen': ts, 'alt_macs': [..]}}
+_SEEN_LOCK = threading.RLock()
+_SEEN_TTL = 300.0         # 5 menit
+_ARP_SNIFFER = {'running': False, 'thread': None, 'stop': None, 'iface': None}
+
+
+def _record_seen(ip, mac):
+    """Catat satu host dari paket ARP. Deteksi MAC alternatif (anomali)."""
+    if not ip or not mac:
+        return
+    mac = mac.lower()
+    now = time.time()
+    with _SEEN_LOCK:
+        h = _SEEN_HOSTS.get(ip)
+        if h is None:
+            _SEEN_HOSTS[ip] = {'mac': mac, 'last_seen': now, 'alt_macs': []}
+        else:
+            h['last_seen'] = now
+            if h['mac'] != mac:
+                if mac not in h['alt_macs']:
+                    h['alt_macs'].append(mac)
+
+
+def _arp_sniffer_loop(iface, stop_evt):
+    def _cb(pkt):
+        try:
+            if pkt.haslayer(ARP):
+                arp = pkt[ARP]
+                _record_seen(arp.psrc, arp.hwsrc)
+        except Exception:
+            pass
+    while not stop_evt.is_set():
+        try:
+            sniff(iface=iface, filter='arp', prn=_cb, store=0, timeout=1.0)
+        except Exception as e:
+            logger.error('arp sniffer err: {}'.format(e))
+            time.sleep(1)
+
+
+def start_arp_sniffer(iface=None):
+    """Mulai thread sniffer ARP (sekali saja)."""
+    if _ARP_SNIFFER['running']:
+        return
+    if iface is None:
+        try:
+            iface = netifaces.gateways()['default'][netifaces.AF_INET][1]
+        except Exception:
+            iface = 'wlan0'
+    stop_evt = threading.Event()
+    t = threading.Thread(target=_arp_sniffer_loop,
+                         args=(iface, stop_evt), daemon=True)
+    _ARP_SNIFFER.update({'running': True, 'thread': t, 'stop': stop_evt,
+                         'iface': iface})
+    t.start()
+    logger.info('ARP sniffer started on {}'.format(iface))
+
+
+def stop_arp_sniffer():
+    if _ARP_SNIFFER['running'] and _ARP_SNIFFER['stop']:
+        _ARP_SNIFFER['stop'].set()
+        _ARP_SNIFFER['running'] = False
+
+
+def get_seen_hosts(ttl=_SEEN_TTL):
+    """Host yang terlihat dalam `ttl` detik terakhir: {ip: mac}."""
+    now = time.time()
+    out = {}
+    with _SEEN_LOCK:
+        for ip in list(_SEEN_HOSTS.keys()):
+            h = _SEEN_HOSTS[ip]
+            if now - h['last_seen'] > ttl:
+                _SEEN_HOSTS.pop(ip, None)
+                continue
+            out[ip] = h['mac']
+    return out
+
+
+def get_seen_alts(ttl=_SEEN_TTL):
+    """MAP IP->list MAC alternatif (host dengan >1 MAC = indikasi anomali)."""
+    now = time.time()
+    out = {}
+    with _SEEN_LOCK:
+        for ip, h in _SEEN_HOSTS.items():
+            if now - h['last_seen'] > ttl:
+                continue
+            if h.get('alt_macs'):
+                out[ip] = list(h['alt_macs'])
+    return out

@@ -8,6 +8,9 @@ Antarmuka grafis berbasis **PyQt5** dengan tema **gelap & terang**.
 
 ## Fitur
 - Pindai & tampilkan semua host di LAN (IP, MAC, hostname, IPv6, status, alias).
+  - **Sniffer ARP persisten**: host yang pernah berkomunikasi tetap terdeteksi
+    walau sedang diam saat scan (daftar lebih lengkap; host tak terlihat > 5 menit
+    otomatis dibuang).
 - **Cut** koneksi host mana pun (IPv4 + IPv6) — benar-benar terputus.
 - **Resume** mengembalikan koneksi host.
 - **Limit bandwidth** per host (upload & download) seperti NetCut.

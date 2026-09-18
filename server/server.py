@@ -30,6 +30,8 @@ from utils import wake_hosts, resolve_hostnames_bulk
 from utils import get_vendor, is_random_mac
 from utils import setup_qos_base, teardown_qos
 from utils import arp_scan_union
+from utils import (start_arp_sniffer, stop_arp_sniffer, get_seen_hosts,
+                   get_seen_alts)
 from utils import get_ipv6_of, has_ipv6_route
 from utils import apply_cut_drop, remove_cut_drop
 from utils import (ping_flood_start, ping_flood_stop, ping_flood_stop_all,
@@ -194,13 +196,27 @@ def scan(gw_ip):
         logger.error(sys.exc_info()[1], exc_info=True)
         found = {}
 
+    # GABUNGKAN dengan host yang tertangkap sniffer ARP persisten
+    # (host yang kebetulan diam saat scan tetap terdeteksi)
+    try:
+        for sip, smac in get_seen_hosts().items():
+            found.setdefault(sip, smac)
+    except Exception:
+        pass
+    try:
+        seen_alts = get_seen_alts()
+    except Exception:
+        seen_alts = {}
+
     for ip, mac in found.items():
         live_hosts.append({
             'ip': ip,
             'mac': mac,
-            'hostname': ''
+            'hostname': '',
+            'alt_macs': seen_alts.get(ip, []),
         })
-    logger.info('arp_scan_union: {} host'.format(len(live_hosts)))
+    logger.info('scan gabungan (arp_scan_union + sniffer): {} host'.format(
+        len(live_hosts)))
 
     # pastikan perangkat ini sendiri selalu ada di daftar
     if my_addr and not any(h['ip'] == my_addr for h in live_hosts):
@@ -830,6 +846,12 @@ def ping_flood_state():
 
 if __name__ == '__main__':
     logger.info('NetControl server starting ...')
+    # mulai sniffer ARP persisten supaya daftar host lengkap
+    try:
+        _iface = get_default_gw().get('iface', 'wlan0')
+        start_arp_sniffer(_iface)
+    except Exception:
+        logger.error('gagal start ARP sniffer', exc_info=True)
     try:
         # server multi-thread (waitress) supaya request tidak saling memblokir
         # (sebelumnya single-thread: scan & status harus antre -> lambat)

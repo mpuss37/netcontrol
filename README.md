@@ -1,8 +1,8 @@
 # NetControl
 
 Alat kontrol jaringan untuk Linux: **memutus (cut)**, **membatasi bandwidth (limit)**,
-dan **melindungi** komputer dari serangan ARP spoofing di jaringan lokal.
-Mendukung **IPv4 dan IPv6**.
+**membanjiri (ping flood)**, dan **melindungi** komputer dari serangan ARP spoofing
+di jaringan lokal. Mendukung **IPv4 dan IPv6**.
 
 Antarmuka grafis berbasis **PyQt5** dengan tema **gelap & terang**.
 
@@ -12,6 +12,8 @@ Antarmuka grafis berbasis **PyQt5** dengan tema **gelap & terang**.
 - **Resume** mengembalikan koneksi host.
 - **Limit bandwidth** per host (upload & download) seperti NetCut.
 - **Limit ALL / Resume ALL** untuk banyak host sekaligus.
+- **Ping Flooder** — banjiri ICMP untuk menaikkan latensi/lag target
+  (preset Rendah/Sedang/Tinggi/Ekstrem + kustom pps & ukuran paket, bisa massal).
 - **Proteksi ARP** untuk komputer ini.
 - Ganti MAC address.
 - Alias host (berdasarkan MAC).
@@ -28,7 +30,7 @@ netcontrol/            GUI PyQt5
     theme.py           stylesheet gelap/terang
 server/
     server.py          daemon (bottle + scapy + iptables/ip6tables + tc)
-    utils.py           ARP/NDP spoof, cut/limit, scan
+    utils.py           ARP/NDP spoof, cut/limit, ping flood, scan
 ```
 
 GUI dan daemon terpisah lewat HTTP API di `127.0.0.1:8013`.

@@ -32,6 +32,8 @@ from utils import setup_qos_base, teardown_qos
 from utils import arp_scan_union
 from utils import get_ipv6_of, has_ipv6_route
 from utils import apply_cut_drop, remove_cut_drop
+from utils import (ping_flood_start, ping_flood_stop, ping_flood_stop_all,
+                   ping_flood_status)
 
 # ── Single-instance guard ──────────────────────────────────────────
 # Mencegah 2+ proses netcontrol-server berjalan bersamaan.
@@ -697,6 +699,134 @@ def scan(iface):
                 'status': 'failed'
             }
         })
+
+@route('/flood', method='POST')
+def ping_flood_one():
+    """
+    Mulai ping flood ke satu host.
+    Body JSON: {ip, hz, size}  (hz = paket/detik, size = byte payload)
+    """
+    response.headers['Content-Type'] = 'application/json'
+    data = request.json or {}
+    ip = data.get('ip')
+    if not ip:
+        return json.dumps({'status': 'error', 'msg': 'ip required'})
+
+    # gateway & perangkat sendiri tidak boleh di-flood
+    try:
+        gw = get_default_gw()
+        if ip == gw.get('ip'):
+            return json.dumps({'status': 'error',
+                               'msg': 'tidak bisa flood gateway'})
+    except Exception:
+        pass
+    try:
+        my = get_my(get_default_gw().get('iface', 'wlan0'))
+        if ip == my.get('ip'):
+            return json.dumps({'status': 'error',
+                               'msg': 'tidak bisa flood perangkat sendiri'})
+    except Exception:
+        pass
+
+    try:
+        hz = int(data.get('hz', 200) or 200)
+        size = int(data.get('size', 56) or 56)
+    except (ValueError, TypeError):
+        return json.dumps({'status': 'error', 'msg': 'hz/size tidak valid'})
+
+    ok, msg = ping_flood_start(ip, hz=hz, size=size)
+    if ok:
+        return json.dumps({'status': 'success', 'msg': msg})
+    return json.dumps({'status': 'error', 'msg': msg})
+
+
+@route('/flood-all', method='POST')
+def ping_flood_many():
+    """
+    Mulai ping flood massal ke host terpilih.
+    Body JSON: {hosts:[...], selected:[ip,...], hz, size}
+    Gateway selalu dikecualikan.
+    """
+    response.headers['Content-Type'] = 'application/json'
+    data = request.json or {}
+    try:
+        hz = int(data.get('hz', 200) or 200)
+        size = int(data.get('size', 56) or 56)
+    except (ValueError, TypeError):
+        return json.dumps({'status': 'error', 'msg': 'hz/size tidak valid'})
+
+    hosts = data.get('hosts', [])
+    selected = set(data.get('selected', []))
+
+    protect = set()
+    try:
+        gw = get_default_gw()
+        if gw.get('ip'):
+            protect.add(gw['ip'])
+    except Exception:
+        pass
+    try:
+        my = get_my(get_default_gw().get('iface', 'wlan0'))
+        if my.get('ip'):
+            protect.add(my.get('ip'))
+    except Exception:
+        pass
+
+    targets = [h for h in hosts
+               if h.get('ip') in selected and h.get('ip') not in protect]
+
+    done = []
+    failed = []
+    for h in targets:
+        ok, msg = ping_flood_start(h.get('ip'), hz=hz, size=size)
+        if ok:
+            done.append(h.get('ip'))
+        else:
+            failed.append(h.get('ip'))
+
+    logger.info('Mass flood: done={} failed={} hz={} size={}'.format(
+        done, failed, hz, size))
+    return json.dumps({
+        'status': 'success',
+        'msg': 'Flood {} host'.format(len(done)),
+        'done': done,
+        'failed': failed,
+        'excluded': list(protect),
+    })
+
+
+@route('/unflood', method='POST')
+def ping_flood_off():
+    """Hentikan flood ke satu host. Body JSON: {ip}"""
+    response.headers['Content-Type'] = 'application/json'
+    data = request.json or {}
+    ip = data.get('ip')
+    if not ip:
+        return json.dumps({'status': 'error', 'msg': 'ip required'})
+    ok, msg = ping_flood_stop(ip)
+    if ok:
+        return json.dumps({'status': 'success', 'msg': msg})
+    return json.dumps({'status': 'error', 'msg': msg})
+
+
+@route('/unflood-all', method='POST')
+def ping_flood_off_all():
+    """Hentikan SEMUA flood."""
+    response.headers['Content-Type'] = 'application/json'
+    ips = ping_flood_stop_all()
+    return json.dumps({
+        'status': 'success',
+        'msg': 'Flood dihentikan untuk {} host'.format(len(ips)),
+        'done': ips,
+    })
+
+
+@route('/flood-status')
+def ping_flood_state():
+    """Status paket terkirim per host yang sedang di-flood."""
+    response.headers['Content-Type'] = 'application/json'
+    return json.dumps({'status': 'success', 'floods': ping_flood_status()})
+
 
 if __name__ == '__main__':
     logger.info('NetControl server starting ...')

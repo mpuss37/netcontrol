@@ -99,6 +99,36 @@ def limit_all(hosts, selected, upload_kbit, download_kbit):
     }, timeout=90)
 
 
+# ── ping flooder ───────────────────────────────────────────────────
+def ping_flood(host, hz, size):
+    payload = dict(host)
+    payload['hz'] = hz
+    payload['size'] = size
+    return _post('/flood', payload)
+
+
+def ping_flood_all(hosts, selected, hz, size):
+    return _post('/flood-all', {
+        'hosts': hosts,
+        'selected': list(selected),
+        'hz': hz,
+        'size': size,
+    }, timeout=90)
+
+
+def ping_flood_stop(host):
+    return _post('/unflood', host)
+
+
+def ping_flood_stop_all():
+    return _post('/unflood-all', {})
+
+
+def ping_flood_status(timeout=5):
+    d = _get('/flood-status', timeout=timeout)
+    return d.get('floods', {})
+
+
 # ── proteksi & MAC ─────────────────────────────────────────────────
 def protect(gw):
     return _post('/protect', gw)

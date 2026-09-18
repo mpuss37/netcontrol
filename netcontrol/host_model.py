@@ -24,6 +24,7 @@ class HostModel(QAbstractTableModel):
         self._rows = []            # list of dict {ip,mac,hostname,ipv6,status,alias}
         self._offline = set()      # ip yang sedang di-cut
         self._limited = {}         # {ip: label}
+        self._flooding = set()     # ip yang sedang di-ping-flood
         self._online_icon = None
         self._offline_icon = None
 
@@ -110,6 +111,8 @@ class HostModel(QAbstractTableModel):
     def _status_for(self, ip):
         if ip in self._offline:
             return 'CUT (offline)'
+        if ip in self._flooding:
+            return 'FLOOD'
         if ip in self._limited:
             return 'LIMIT: {}'.format(self._limited[ip])
         return 'online'
@@ -117,11 +120,13 @@ class HostModel(QAbstractTableModel):
     def mark_cut(self, ip):
         self._offline.add(ip)
         self._limited.pop(ip, None)
+        self._flooding.discard(ip)
         self.update_statuses()
 
     def mark_online(self, ip):
         self._offline.discard(ip)
         self._limited.pop(ip, None)
+        self._flooding.discard(ip)
         self.update_statuses()
 
     def mark_limited(self, ip, label):
@@ -132,6 +137,21 @@ class HostModel(QAbstractTableModel):
     def mark_unlimited(self, ip):
         self._limited.pop(ip, None)
         self.update_statuses()
+
+    def mark_flooding(self, ip):
+        if ip not in self._offline:
+            self._flooding.add(ip)
+        self.update_statuses()
+
+    def mark_unflooding(self, ip):
+        self._flooding.discard(ip)
+        self.update_statuses()
+
+    def is_flooding(self, ip):
+        return ip in self._flooding
+
+    def flooding_ips(self):
+        return set(self._flooding)
 
     def set_alias(self, ip, alias):
         for r in self._rows:

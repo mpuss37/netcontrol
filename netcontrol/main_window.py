@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
 
 from . import api, theme
 from .host_model import HostModel, COL_IP, COL_MAC, COL_HOSTNAME, COL_ALIAS
-from .dialogs import SpeedDialog, LimitAllDialog, AliasDialog
+from .dialogs import SpeedDialog, LimitAllDialog, AliasDialog, FloodDialog
 
 APP_DIR = os.path.join(str(Path.home()), '.netcontrol')
 
@@ -161,6 +161,9 @@ class MainWindow(QMainWindow):
                            self._on_change_mac)
         self.act_alias = act(QStyle.SP_FileDialogDetailedView, 'Give an alias',
                              self._on_alias)
+        tb.addSeparator()
+        self.act_flood = act(QStyle.SP_MessageBoxWarning, 'Ping Flooder (buat lag)',
+                             self._on_flood)
         tb.addSeparator()
         self.act_theme = act(QStyle.SP_DesktopIcon, 'Toggle tema gelap/terang',
                              self._toggle_theme)
@@ -427,7 +430,37 @@ class MainWindow(QMainWindow):
             self.model.set_alias(host['ip'], val)
             self.statusBar().showMessage('Alias disimpan untuk {}'.format(mac))
 
+    # ── ping flooder ───────────────────────────────────────────────
+    def _on_flood(self):
+        hosts = self.model.all_hosts()
+        if not hosts:
+            QMessageBox.information(self, 'Kosong', 'Refresh dulu daftarnya.')
+            return
+        dlg = FloodDialog(self, hosts)
+        dlg.exec_()
+        self._refresh_summary()
+
+    def notify_flooding(self, ips):
+        for ip in ips:
+            self.model.mark_flooding(ip)
+        if ips:
+            self.statusBar().showMessage(
+                'Ping flood aktif: {} host'.format(len(ips)))
+        self._refresh_summary()
+
+    def notify_unflooding(self, ips):
+        for ip in ips:
+            self.model.mark_unflooding(ip)
+        self._refresh_summary()
+
     def closeEvent(self, event):
+        # hentikan semua flood yang sedang jalan
+        try:
+            st = api.ping_flood_status()
+            if st:
+                api.ping_flood_stop_all()
+        except Exception:
+            pass
         # lepas proteksi bila aktif (meniru perilaku lama)
         try:
             if self.cb_protection.isChecked():
@@ -443,10 +476,13 @@ class MainWindow(QMainWindow):
     def _refresh_summary(self):
         n_cut = len(self.model.cut_ips())
         n_lim = len(self.model.limited_ips())
+        n_flood = len(self.model.flooding_ips())
         parts = []
         if n_cut:
             parts.append('{} cut'.format(n_cut))
         if n_lim:
             parts.append('{} limited'.format(n_lim))
+        if n_flood:
+            parts.append('{} flooding'.format(n_flood))
         self.statusBar().showMessage(
             'Siap - ' + ', '.join(parts) if parts else 'Siap')

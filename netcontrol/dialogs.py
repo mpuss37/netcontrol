@@ -1,8 +1,9 @@
 """Dialog-dialog NetControl (versi PyQt5)."""
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QComboBox,
     QPushButton, QCheckBox, QScrollArea, QWidget, QLineEdit, QMessageBox,
+    QSpinBox, QGroupBox,
 )
 
 from . import api
@@ -229,3 +230,221 @@ class AliasDialog(QDialog):
 
     def value(self):
         return self.edit.text().strip()
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Ping Flooder
+# ──────────────────────────────────────────────────────────────────────
+FLOOD_PRESETS = [
+    ('Rendah (100 pps)', 100),
+    ('Sedang (300 pps)', 300),
+    ('Tinggi (800 pps)', 800),
+    ('Ekstrem (2000 pps)', 2000),
+    ('Kustom', -1),
+]
+FLOOD_SIZES = [
+    ('Kecil (56 B)', 56),
+    ('Sedang (512 B)', 512),
+    ('Besar (1200 B)', 1200),
+]
+
+
+class FloodDialog(QDialog):
+    """
+    Dialog Ping Flooder: flood ICMP ke host terpilih (bisa massal),
+    dengan preset kecepatan + kustom, untuk menaikkan latensi target.
+    """
+
+    def __init__(self, parent, hosts):
+        super().__init__(parent)
+        self.hosts = hosts
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._poll_status)
+
+        self.setWindowTitle('Ping Flooder')
+        self.setMinimumSize(520, 540)
+
+        v = QVBoxLayout(self)
+
+        # ---- intensitas ----
+        box1 = QGroupBox('Intensitas (paket ICMP per detik)')
+        f1 = QFormLayout(box1)
+        self.preset = QComboBox()
+        for label, _ in FLOOD_PRESETS:
+            self.preset.addItem(label)
+        self.preset.setCurrentIndex(1)          # Sedang default
+        self.preset.currentIndexChanged.connect(self._on_preset)
+        f1.addRow('Preset:', self.preset)
+
+        self.spin_hz = QSpinBox()
+        self.spin_hz.setRange(1, 5000)
+        self.spin_hz.setValue(300)
+        self.spin_hz.setSuffix(' pps')
+        f1.addRow('Kustom pps:', self.spin_hz)
+        v.addWidget(box1)
+
+        # ---- ukuran paket ----
+        box2 = QGroupBox('Ukuran paket')
+        f2 = QFormLayout(box2)
+        self.size = QComboBox()
+        for label, _ in FLOOD_SIZES:
+            self.size.addItem(label)
+        self.size.setCurrentIndex(0)
+        f2.addRow('Ukuran:', self.size)
+        v.addWidget(box2)
+
+        # ---- daftar host ----
+        v.addWidget(QLabel('Pilih host yang AKAN DI-FLOOD (centang):'))
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        inner = QWidget()
+        from PyQt5.QtWidgets import QVBoxLayout as _V
+        lay = _V(inner)
+        area.setWidget(inner)
+        v.addWidget(area, 1)
+
+        self.checkboxes = {}
+        for h in hosts:
+            hname = h.get('hostname', '') or ''
+            is_gw = ('(GATEWAY)' in hname)
+            label = '{}   {}'.format(h['ip'], hname)
+            cb = QCheckBox(label)
+            if is_gw:
+                cb.setChecked(False)
+                cb.setEnabled(False)     # gateway jangan di-flood
+            else:
+                cb.setChecked(False)     # default: pilih manual
+            self.checkboxes[h['ip']] = cb
+            lay.addWidget(cb)
+        lay.addStretch(1)
+
+        h = QHBoxLayout()
+        b_all = QPushButton('Centang Semua')
+        b_none = QPushButton('Kosongkan')
+        h.addWidget(b_all)
+        h.addWidget(b_none)
+        h.addStretch(1)
+        v.addLayout(h)
+
+        # ---- tombol aksi ----
+        h2 = QHBoxLayout()
+        self.btn_start = QPushButton('Start Flood')
+        self.btn_stop = QPushButton('Stop Flood')
+        self.btn_stop_all = QPushButton('Stop Semua')
+        self.btn_close = QPushButton('Close')
+        h2.addWidget(self.btn_start)
+        h2.addWidget(self.btn_stop)
+        h2.addWidget(self.btn_stop_all)
+        h2.addStretch(1)
+        h2.addWidget(self.btn_close)
+        v.addLayout(h2)
+
+        self.status = QLabel('')
+        v.addWidget(self.status)
+
+        b_all.clicked.connect(self._check_all)
+        b_none.clicked.connect(self._uncheck_all)
+        self.btn_start.clicked.connect(self._start)
+        self.btn_stop.clicked.connect(self._stop)
+        self.btn_stop_all.clicked.connect(self._stop_all)
+        self.btn_close.clicked.connect(self._close)
+
+        self._timer.start()
+
+    # ---- helpers ----
+    def _on_preset(self, idx):
+        _, val = FLOOD_PRESETS[idx]
+        if val > 0:
+            self.spin_hz.setValue(val)
+            self.spin_hz.setEnabled(False)
+        else:
+            self.spin_hz.setEnabled(True)
+
+    def _check_all(self):
+        for cb in self.checkboxes.values():
+            if cb.isEnabled():
+                cb.setChecked(True)
+
+    def _uncheck_all(self):
+        for cb in self.checkboxes.values():
+            if cb.isEnabled():
+                cb.setChecked(False)
+
+    def _selected_hosts(self):
+        return [h for h in self.hosts
+                if self.checkboxes.get(h['ip']) and
+                self.checkboxes[h['ip']].isChecked()]
+
+    def _hz_size(self):
+        return self.spin_hz.value(), FLOOD_SIZES[self.size.currentIndex()][1]
+
+    # ---- aksi ----
+    def _start(self):
+        targets = self._selected_hosts()
+        if not targets:
+            self.status.setText('Pilih minimal satu host.')
+            return
+        hz, size = self._hz_size()
+        self.btn_start.setEnabled(False)
+        self.status.setText('Memulai flood ke {} host ({} pps)...'.format(
+            len(targets), hz))
+        try:
+            res = api.ping_flood_all(self.hosts, [t['ip'] for t in targets],
+                                     hz, size)
+            if res.get('status') == 'success':
+                done = res.get('done', [])
+                if self.parent():
+                    self.parent().notify_flooding(done)
+                self.status.setText(
+                    'FLOOD AKTIF: {} host @ {} pps, {} B'.format(
+                        len(done), hz, size))
+            else:
+                self.status.setText('FAILED: ' + str(res.get('msg', '')))
+        except api.ApiError as e:
+            self.status.setText('ERROR: {}'.format(e))
+        finally:
+            self.btn_start.setEnabled(True)
+
+    def _stop(self):
+        targets = self._selected_hosts()
+        if not targets:
+            self.status.setText('Pilih host yang ingin dihentikan.')
+            return
+        stopped = []
+        for h in targets:
+            try:
+                api.ping_flood_stop(h)
+                stopped.append(h['ip'])
+            except api.ApiError:
+                pass
+        if self.parent():
+            self.parent().notify_unflooding(stopped)
+        self.status.setText('Flood dihentikan: {} host'.format(len(stopped)))
+
+    def _stop_all(self):
+        try:
+            res = api.ping_flood_stop_all()
+            done = res.get('done', [])
+            if self.parent():
+                self.parent().notify_unflooding(done)
+            self.status.setText('Semua flood dihentikan ({} host)'.format(
+                len(done)))
+        except api.ApiError as e:
+            self.status.setText('ERROR: {}'.format(e))
+
+    def _poll_status(self):
+        try:
+            st = api.ping_flood_status()
+        except api.ApiError:
+            return
+        if not st:
+            return
+        parts = []
+        for ip, info in st.items():
+            parts.append('{}: {} pkt'.format(ip, info.get('sent', 0)))
+        self.status.setText('FLOOD AKTIF -> ' + ' | '.join(parts))
+
+    def _close(self):
+        self._timer.stop()
+        self.reject()

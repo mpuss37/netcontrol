@@ -1,0 +1,62 @@
+#!/bin/bash
+# ============================================================
+#  NetControl launcher
+#  Otomatis: cek server -> start kalau perlu -> buka GUI (PyQt5)
+#  Pakai:  sudo netcontrol
+# ============================================================
+
+SRC_DIR="/home/mpuss/test/netcontrol"
+GUI_DIR="$SRC_DIR"
+SERVER="$SRC_DIR/server/server.py"
+LOG="/var/log/netcontrol/netcontrold.out"
+
+# --- deteksi user desktop yang asli (untuk DISPLAY & XAUTHORITY) ---
+REAL_USER="${SUDO_USER:-$USER}"
+if [ "$REAL_USER" = "root" ] || [ -z "$REAL_USER" ]; then
+    REAL_USER=$(who 2>/dev/null | grep -E '\(:[0-9]' | awk '{print $1}' | head -1)
+    [ -z "$REAL_USER" ] && REAL_USER=$(ls /home 2>/dev/null | head -1)
+fi
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+[ -z "$REAL_HOME" ] && REAL_HOME="/home/$REAL_USER"
+
+# deteksi DISPLAY aktif
+if [ -z "$DISPLAY" ]; then
+    for d in :0 :1 :2; do
+        [ -e "/tmp/.X11-unix/X${d#:}" ] && DISPLAY="$d" && break
+    done
+fi
+export DISPLAY="${DISPLAY:-:0}"
+export XAUTHORITY="${XAUTHORITY:-$REAL_HOME/.Xauthority}"
+
+PY=python3
+mkdir -p /var/log/netcontrol 2>/dev/null
+
+server_up() {
+    curl -s -m 2 http://127.0.0.1:8013/status >/dev/null 2>&1
+}
+
+# ---------- pastikan server jalan ----------
+if server_up; then
+    echo "[+] Server sudah jalan."
+else
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "[!] Butuh root. Jalankan:  sudo netcontrol"
+        exit 1
+    fi
+    echo "[*] Menjalankan server NetControl ..."
+    setsid nohup $PY "$SERVER" > "$LOG" 2>&1 < /dev/null &
+    for i in $(seq 1 24); do
+        server_up && break
+        sleep 0.5
+    done
+    if ! server_up; then
+        echo "[!] Server gagal start. Cek: $LOG"
+        exit 1
+    fi
+    echo "[+] Server siap."
+fi
+
+# ---------- jalankan GUI ----------
+echo "[*] Membuka GUI NetControl ..."
+cd "$GUI_DIR" || exit 1
+exec $PY -m netcontrol.app

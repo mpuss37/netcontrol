@@ -1,0 +1,32 @@
+#!/sbin/openrc-run
+
+name="netcontrold"
+description="NetControl daemon (ARP/network cutter & bandwidth limiter)"
+
+command="/usr/bin/python3"
+command_args="/opt/netcontrol/server/server.py"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/netcontrol/netcontrold.out"
+error_log="/var/log/netcontrol/netcontrold.err"
+
+supervisor="supervise-daemon"
+respawn_delay=3
+respawn_max=0
+
+depend() {
+    need net
+    after net
+}
+
+start_pre() {
+    checkpath -d -m 0755 /var/log/netcontrol
+    checkpath -d -m 0755 /run
+    # kill sisa proses lama
+    if [ -f "$pidfile" ]; then
+        kill $(cat "$pidfile" 2>/dev/null) 2>/dev/null
+        sleep 0.5
+        rm -f "$pidfile"
+    fi
+    rm -f /run/netcontrol-server.lock
+}

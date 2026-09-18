@@ -1,0 +1,8 @@
+bottle
+waitress
+scapy
+APScheduler
+netifaces
+setproctitle
+requests
+PyQt5

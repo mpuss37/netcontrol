@@ -1,11 +1,9 @@
 """
 Model tabel untuk daftar host (QAbstractTableModel).
 
-Kolom: [Status-icon, IP, MAC, Hostname, IPv6, Status, Alias]
+Kolom: [Status, IP, MAC, Hostname, IPv6, Status, Alias]
 """
 from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QStyle
 
 COL_ICON = 0
 COL_IP = 1
@@ -15,7 +13,7 @@ COL_IPV6 = 4
 COL_STATUS = 5
 COL_ALIAS = 6
 
-HEADERS = ['', 'IP Address', 'MAC Address', 'Hostname', 'IPv6', 'Status', 'Alias']
+HEADERS = ['Status', 'IP Address', 'MAC Address', 'Hostname', 'IPv6', 'Status', 'Alias']
 
 
 class HostModel(QAbstractTableModel):
@@ -25,16 +23,6 @@ class HostModel(QAbstractTableModel):
         self._offline = set()      # ip yang sedang di-cut
         self._limited = {}         # {ip: label}
         self._flooding = set()     # ip yang sedang di-ping-flood
-        self._online_icon = None
-        self._offline_icon = None
-
-    # ── ikon ──────────────────────────────────────────────────────
-    def _icons(self):
-        if self._online_icon is None:
-            st = QApplication.style()
-            self._online_icon = st.standardIcon(QStyle.SP_DialogApplyButton)
-            self._offline_icon = st.standardIcon(QStyle.SP_DialogCancelButton)
-        return self._online_icon, self._offline_icon
 
     # ── QAbstractTableModel ───────────────────────────────────────
     def rowCount(self, parent=QModelIndex()):
@@ -56,7 +44,7 @@ class HostModel(QAbstractTableModel):
 
         if role == Qt.DisplayRole:
             return {
-                COL_ICON: '',
+                COL_ICON: 'ON' if row['ip'] not in self._offline else 'OFF',
                 COL_IP: row['ip'],
                 COL_MAC: row['mac'],
                 COL_HOSTNAME: row['hostname'],
@@ -64,10 +52,6 @@ class HostModel(QAbstractTableModel):
                 COL_STATUS: row['status'],
                 COL_ALIAS: row['alias'],
             }.get(col, '')
-
-        if role == Qt.DecorationRole and col == COL_ICON:
-            online, offline = self._icons()
-            return offline if row['ip'] in self._offline else online
 
         if role == Qt.TextAlignmentRole and col in (COL_ICON, COL_STATUS):
             return int(Qt.AlignCenter)

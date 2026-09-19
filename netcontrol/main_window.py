@@ -2,7 +2,7 @@
 Window utama NetControl (PyQt5).
 
 Fitur (identik dengan versi lama):
-  - tabel host (ikon status, IP, MAC, Hostname, IPv6, Status, Alias)
+  - tabel host (status text, IP, MAC, Hostname, IPv6, Status, Alias)
   - toolbar: Refresh, Cut/Resume, Resume, Speed, Limit All, Resume All,
     Change MAC, Alias, Toggle Tema, Exit
   - proteksi ARP (checkbox)
@@ -17,7 +17,7 @@ from pathlib import Path
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTableView, QCheckBox,
-    QToolBar, QAction, QLabel, QMessageBox, QHeaderView, QApplication, QStyle,
+    QToolBar, QAction, QLabel, QMessageBox, QHeaderView, QApplication,
     QAbstractItemView, QTabWidget, QPlainTextEdit,
 )
 
@@ -96,7 +96,6 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         self.setWindowTitle('NetControl')
         self.resize(820, 460)
-        self.setWindowIcon(self._icon(QStyle.SP_ComputerIcon))
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -156,16 +155,13 @@ class MainWindow(QMainWindow):
         self._dash_timer.start()
         self._refresh_dashboard()
 
-    def _icon(self, sp):
-        return QApplication.style().standardIcon(sp)
-
     def _build_toolbar(self):
         tb = QToolBar()
         tb.setMovable(False)
         self.addToolBar(tb)
 
-        def act(icon_sp, tip, slot, checkable=False):
-            a = QAction(self._icon(icon_sp), tip, self)
+        def act(text, tip, slot, checkable=False):
+            a = QAction(text, self)
             a.setToolTip(tip)
             if checkable:
                 a.setCheckable(True)
@@ -173,30 +169,22 @@ class MainWindow(QMainWindow):
             tb.addAction(a)
             return a
 
-        self.act_refresh = act(QStyle.SP_BrowserReload, 'Refresh', self.refresh)
-        self.act_cut = act(QStyle.SP_DialogCancelButton,
-                           'Cut / Resume (toggle)', self._on_cut)
-        self.act_resume = act(QStyle.SP_DialogResetButton, 'Resume', self._on_resume)
-        self.act_speed = act(QStyle.SP_MediaSeekForward,
-                             'Limit Bandwidth (Speed)', self._on_speed)
+        self.act_refresh = act('Refresh', 'Refresh', self.refresh)
+        self.act_cut = act('Cut', 'Cut / Resume (toggle)', self._on_cut)
+        self.act_resume = act('Resume', 'Resume', self._on_resume)
+        self.act_speed = act('Speed', 'Limit Bandwidth (Speed)', self._on_speed)
         tb.addSeparator()
-        self.act_limit_all = act(QStyle.SP_FileDialogListView,
-                                 'Limit ALL hosts', self._on_limit_all)
-        self.act_resume_all = act(QStyle.SP_DialogOkButton,
-                                  'Resume ALL hosts', self._on_resume_all)
+        self.act_limit_all = act('Limit All', 'Limit ALL hosts', self._on_limit_all)
+        self.act_resume_all = act('Resume All', 'Resume ALL hosts', self._on_resume_all)
         tb.addSeparator()
-        self.act_mac = act(QStyle.SP_DriveNetIcon, 'Change MAC Address',
-                           self._on_change_mac)
-        self.act_alias = act(QStyle.SP_FileDialogDetailedView, 'Give an alias',
-                             self._on_alias)
+        self.act_mac = act('MAC', 'Change MAC Address', self._on_change_mac)
+        self.act_alias = act('Alias', 'Give an alias', self._on_alias)
         tb.addSeparator()
-        self.act_flood = act(QStyle.SP_MessageBoxWarning, 'Ping Flooder (buat lag)',
-                             self._on_flood)
+        self.act_flood = act('Flood', 'Ping Flooder (buat lag)', self._on_flood)
         tb.addSeparator()
-        self.act_theme = act(QStyle.SP_DesktopIcon, 'Toggle tema gelap/terang',
-                             self._toggle_theme)
+        self.act_theme = act('Tema', 'Toggle tema gelap/terang', self._toggle_theme)
         tb.addSeparator()
-        self.act_exit = act(QStyle.SP_DialogCloseButton, 'Exit', self.close)
+        self.act_exit = act('Exit', 'Exit', self.close)
 
     # ── tema ───────────────────────────────────────────────────────
     def _apply_theme(self, name):

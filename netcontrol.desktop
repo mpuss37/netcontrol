@@ -2,9 +2,8 @@
 Name=NetControl
 GenericName=Network Control Tool
 Comment=Cut / limit network hosts (ARP spoofing) - IPv4 & IPv6
-Exec=kitty -e sudo /usr/bin/netcontrol
-Icon=netcontrol.png
-Type=Application
-Terminal=false
+Exec=sudo /usr/bin/netcontrol
+Icon=none
+Terminal=true
 StartupNotify=true
 Categories=Utility;Security;Network;

@@ -3,9 +3,29 @@
 #  NetControl launcher
 #  Otomatis: cek server -> start kalau perlu -> buka GUI (PyQt5)
 #  Pakai:  sudo netcontrol
+#
+#  Lokasi kode dideteksi otomatis, berurutan:
+#    1. $NETCONTROL_DIR   (env override)
+#    2. /opt/netcontrol   (hasil instalasi build.sh / manual)
+#    3. salah satu path kandidat development yang ada
 # ============================================================
 
-SRC_DIR="/home/mpuss/test/netcontrol"
+find_src() {
+    [ -n "$NETCONTROL_DIR" ] && [ -d "$NETCONTROL_DIR/netcontrol" ] && {
+        echo "$NETCONTROL_DIR"; return; }
+    for d in /opt/netcontrol "$HOME/test/netcontrol" \
+             "$(cd "$(dirname "$0")" 2>/dev/null && pwd)"; do
+        [ -n "$d" ] && [ -d "$d/netcontrol" ] && [ -f "$d/server/server.py" ] && {
+            echo "$d"; return; }
+    done
+}
+
+SRC_DIR="$(find_src)"
+if [ -z "$SRC_DIR" ]; then
+    echo "[!] Tidak menemukan direktori NetControl."
+    echo "    Set manual:  export NETCONTROL_DIR=/path/ke/netcontrol"
+    exit 1
+fi
 GUI_DIR="$SRC_DIR"
 SERVER="$SRC_DIR/server/server.py"
 LOG="/var/log/netcontrol/netcontrold.out"
